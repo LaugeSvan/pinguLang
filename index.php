@@ -38,10 +38,8 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
             $lookup_word = substr($lookup_word, 0, -1);
         }
 
-        // --- B. Database / Smart Compound / AI Lookup ---
+        // --- B. Database / AI Lookup ---
         $root_word = "";
-        $found_via = ""; 
-
         $stmt = $conn->prepare("SELECT conlang_word FROM dictionary WHERE english_word = ?");
         $stmt->bind_param("s", $lookup_word);
         $stmt->execute();
@@ -65,7 +63,6 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
                     if (levenshtein($lookup_word, $row['english_word']) === 1) {
                         $root_word = $row['conlang_word'];
                         $status_message = "Typo detected: Using root for '" . $row['english_word'] . "'.";
-                        $found_via = "fuzzy";
                         break;
                     }
                 }
@@ -75,16 +72,13 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
                 $recent_avoid = $conn->query("SELECT conlang_word FROM dictionary ORDER BY id DESC LIMIT 10");
                 $avoid_list = [];
                 while($r = $recent_avoid->fetch_assoc()) { $avoid_list[] = $r['conlang_word']; }
-
                 $root_word = callAi($lookup_word, $context, implode(", ", $avoid_list));
-                $found_via = "ai";
 
                 if ($root_word && $root_word !== "error") {
                     if (!empty($compounds_found)) {
                         $formatted_context = str_replace([':', ','], [' (', '),'], $context) . ')';
                         $status_message = "Blended compound using: " . $formatted_context;
                     }
-                    
                     $ins = $conn->prepare("INSERT INTO dictionary (english_word, conlang_word) VALUES (?, ?)");
                     $ins->bind_param("ss", $lookup_word, $root_word);
                     $ins->execute();
@@ -101,15 +95,25 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
 }
 
 // --- 2. FETCH LISTS ---
-$history = $conn->query("SELECT * FROM dictionary ORDER BY id DESC LIMIT 5"); // Just last 5
+$history = $conn->query("SELECT * FROM dictionary ORDER BY id DESC LIMIT 5");
 $alphabetical = $conn->query("SELECT * FROM dictionary ORDER BY english_word ASC");
+
+// Create the Jump-Link list (Unique first letters)
+$letters = [];
+$dict_data = [];
+while($row = $alphabetical->fetch_assoc()) {
+    $first_letter = strtoupper($row['english_word'][0]);
+    $letters[] = $first_letter;
+    $dict_data[] = $row;
+}
+$unique_letters = array_unique($letters);
 
 function callAi($word, $context = "", $avoid = "") {
     $url = "https://api.groq.com/openai/v1/chat/completions";
     $payload = [
         "model" => "llama-3.3-70b-versatile",
         "messages" => [
-            ["role" => "system", "content" => "You are the creator of the Pingulinian language. Phonology: m, r, p, k, s, l, f, n, t, a, e, i, o, u. Keep words short. Blend if context exists. Context: [$context]. Avoid: [$avoid]. Output ONLY word."],
+            ["role" => "system", "content" => "You are the creator of the Pingulinian language. Phonology: m, r, p, k, s, l, f, n, t, a, e, i, o, u. Blend if context exists: [$context]. Avoid: [$avoid]. Output ONLY word."],
             ["role" => "user", "content" => "New word for '$word':"]
         ],
         "temperature" => 0.7
@@ -132,41 +136,36 @@ function callAi($word, $context = "", $avoid = "") {
     <title>LingoGen | Pingulinian</title>
     <style>
         :root { --primary: #6366f1; --bg: #0f172a; --card: #1e293b; --error: #f87171; --success: #10b981; }
-        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; padding: 2rem; display: flex; flex-direction: column; align-items: center; }
-        .container { background: var(--card); padding: 2rem; border-radius: 1rem; width: 100%; max-width: 450px; text-align: center; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); margin-bottom: 2rem; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; padding: 2rem; display: flex; flex-direction: column; align-items: center; scroll-behavior: smooth; }
+        .container { background: var(--card); padding: 2rem; border-radius: 1rem; width: 100%; max-width: 450px; text-align: center; border: 1px solid #334155; margin-bottom: 2rem; }
         input { width: 75%; padding: 0.8rem; border-radius: 0.5rem; border: 1px solid #334155; background: #0f172a; color: white; margin-bottom: 10px; font-size: 1rem; }
         button { padding: 0.8rem 1.5rem; border-radius: 0.5rem; border: none; background: var(--primary); color: white; cursor: pointer; font-weight: bold; width: 100%; }
-        .result-box { margin-top: 2rem; padding: 1.5rem; background: rgba(99, 102, 241, 0.1); border-radius: 0.5rem; border-left: 4px solid var(--primary); animation: fadeIn 0.4s ease-out; }
-        .conlang { font-size: 2.2rem; font-weight: 800; color: #818cf8; display: block; margin-top: 5px; }
-        .history-section { width: 100%; max-width: 450px; margin-bottom: 3rem; }
+        .conlang { font-size: 2.2rem; font-weight: 800; color: #818cf8; display: block; }
+        .history-section { width: 100%; max-width: 450px; }
         table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 0.5rem; overflow: hidden; margin-bottom: 2rem; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
-        th { background: rgba(255,255,255,0.05); color: #94a3b8; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
         .section-title { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; border-left: 3px solid var(--primary); padding-left: 10px; }
-        .admin-button { position: fixed; top: 20px; right: 20px; padding: 0.4rem 0.8rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; background: rgba(255,255,255,0.08); color: #94a3b8; border: 1px solid #334155; border-radius: 999px; text-decoration: none; z-index: 1000; }
-        .admin-button:hover { background: var(--primary); color: white; border-color: var(--primary); }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* JUMP BAR STYLES */
+        .alphabet-bar { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 1rem; justify-content: center; }
+        .letter-link { background: rgba(255,255,255,0.05); color: #94a3b8; padding: 4px 8px; border-radius: 4px; text-decoration: none; font-size: 0.7rem; font-weight: bold; border: 1px solid #334155; }
+        .letter-link:hover { background: var(--primary); color: white; }
+        .letter-header { background: rgba(99, 102, 241, 0.1); color: var(--primary); padding: 5px 12px; font-weight: bold; border-radius: 4px; margin-top: 10px; display: inline-block; }
+
+        .admin-button { position: fixed; top: 20px; right: 20px; padding: 0.4rem 0.8rem; font-size: 0.7rem; font-weight: 700; background: rgba(255,255,255,0.08); color: #94a3b8; border: 1px solid #334155; border-radius: 999px; text-decoration: none; }
     </style>
 </head>
 <body>
     <a href="admin.php" class="admin-button">Admin</a>
 
     <div class="container">
-        <h1 style="letter-spacing: 5px; color: #94a3b8; margin-bottom: 20px; font-size: 1.5rem;">PINGULINIAN</h1>
+        <h1 style="letter-spacing: 5px; color: #94a3b8;">PINGULINIAN</h1>
         <form method="POST">
-            <input type="text" name="search" placeholder="Enter English word..." value="<?= htmlspecialchars($search) ?>" autocomplete="off" autofocus>
+            <input type="text" name="search" placeholder="English word..." value="<?= htmlspecialchars($search) ?>" autocomplete="off" autofocus>
             <button type="submit">TRANSLATE</button>
         </form>
-
-        <?php if ($status_message): ?>
-            <p style="color: #94a3b8; font-size: 0.8rem; margin-top: 15px; font-style: italic;">Note: <?= $status_message ?></p>
-        <?php endif; ?>
-
         <?php if ($output): ?>
-            <div class="result-box">
-                <span style="color: #64748b; font-size: 0.75rem; font-weight: bold; text-transform: uppercase;">
-                    Translation <?= $is_new ? '<span class="new-badge" style="font-size: 0.6rem; background: var(--success); color: white; padding: 2px 6px; border-radius: 10px; vertical-align: middle; margin-left: 5px;">NEW ENTRY</span>' : '' ?>
-                </span>
+            <div style="margin-top: 2rem; padding: 1.5rem; background: rgba(99, 102, 241, 0.1); border-radius: 0.5rem; border-left: 4px solid var(--primary);">
                 <span class="conlang"><?= htmlspecialchars($output) ?></span>
             </div>
         <?php endif; ?>
@@ -175,27 +174,37 @@ function callAi($word, $context = "", $avoid = "") {
     <div class="history-section">
         <h3 class="section-title">Recently Translated</h3>
         <table>
-            <thead><tr><th>English</th><th>Pingulinian</th></tr></thead>
-            <tbody>
-                <?php while($row = $history->fetch_assoc()): ?>
-                    <tr>
-                        <td style="color: #cbd5e1;"><?= htmlspecialchars($row['english_word']) ?></td>
-                        <td style="color: #818cf8; font-weight: bold;"><?= htmlspecialchars($row['conlang_word']) ?></td>
-                    </tr>
-                <?php endwhile; ?>
-            </tbody>
+            <?php while($row = $history->fetch_assoc()): ?>
+                <tr><td><?= htmlspecialchars($row['english_word']) ?></td><td style="color: #818cf8; font-weight: bold;"><?= htmlspecialchars($row['conlang_word']) ?></td></tr>
+            <?php endwhile; ?>
         </table>
 
-        <h3 class="section-title">Full Dictionary (A-Z)</h3>
+        <h3 class="section-title">Dictionary (A-Z)</h3>
+        
+        <div class="alphabet-bar">
+            <?php foreach($unique_letters as $l): ?>
+                <a href="#letter-<?= $l ?>" class="letter-link"><?= $l ?></a>
+            <?php endforeach; ?>
+        </div>
+
         <table>
-            <thead><tr><th>English</th><th>Pingulinian</th></tr></thead>
             <tbody>
-                <?php while($row = $alphabetical->fetch_assoc()): ?>
+                <?php 
+                $current_letter = "";
+                foreach($dict_data as $row): 
+                    $first = strtoupper($row['english_word'][0]);
+                    if ($first !== $current_letter): 
+                        $current_letter = $first;
+                ?>
+                    <tr id="letter-<?= $current_letter ?>">
+                        <td colspan="2"><span class="letter-header"><?= $current_letter ?></span></td>
+                    </tr>
+                <?php endif; ?>
                     <tr>
                         <td style="color: #cbd5e1;"><?= htmlspecialchars($row['english_word']) ?></td>
                         <td style="color: #818cf8; font-weight: bold;"><?= htmlspecialchars($row['conlang_word']) ?></td>
                     </tr>
-                <?php endwhile; ?>
+                <?php endforeach; ?>
             </tbody>
         </table>
     </div>
