@@ -69,7 +69,7 @@ $all_words = $conn->query("SELECT * FROM dictionary ORDER BY id DESC");
 <div class="container">
     <div style="display: flex; justify-content: space-between; align-items: center;">
         <h1>Dictionary Admin</h1>
-        <a href="index.php" style="color: #94a3b8; text-decoration: none;">← Translator</a>
+        <a href="/" style="color: #94a3b8; text-decoration: none;">← Translator</a>
     </div>
 
     <?php if (!isset($_SESSION['is_admin'])): ?>
