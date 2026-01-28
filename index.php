@@ -70,29 +70,50 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
         if (!$api_data) {
             $status_message = "Sorry pal, we couldn't find definitions for '$search'.";
         } else {
-            $lookup_word = strtolower($api_data['word']);
-            $is_verb = false;
-
-            foreach ($api_data['meanings'] as $meaning) {
-                if ($meaning['partOfSpeech'] === 'verb') {
-                    $is_verb = true;
-                    break;
-                }
+            $raw_api_word = strtolower($api_data['word']);
+            $lookup_word = $raw_api_word;
+            
+            // 1. Identify Potential Roots
+            $potential_roots = [$raw_api_word]; 
+            
+            if (str_ends_with($raw_api_word, 'ing')) {
+                $base = substr($raw_api_word, 0, -3);
+                $potential_roots[] = $base;        // "driv"
+                $potential_roots[] = $base . "e";   // "drive" (Restores the 'e')
+            } elseif (str_ends_with($raw_api_word, 'ed')) {
+                $base = substr($raw_api_word, 0, -2);
+                $potential_roots[] = $base;        // "walk"
+                $potential_roots[] = $base . "e";   // "bake" (if search was baked)
+            } elseif (str_ends_with($raw_api_word, 's') && !str_ends_with($raw_api_word, 'ss')) {
+                $potential_roots[] = substr($raw_api_word, 0, -1);
             }
 
-            $is_plural = str_ends_with($search, 's') && !str_ends_with($search, 'ss');
+            // 2. Determine if it's a verb
+            $is_verb = false;
+            foreach ($api_data['meanings'] as $meaning) {
+                if ($meaning['partOfSpeech'] === 'verb') $is_verb = true;
+            }
+            if (str_ends_with($search, 'ing')) $is_verb = true;
+            $is_plural = str_ends_with($search, 's') && !str_ends_with($search, 'ss') && !str_ends_with($search, 'ing');
 
-            // --- Database Lookup ---
+            // 3. Database Lookup (Check all potential versions of the root)
             $root_word = "";
-            $stmt = $conn->prepare("SELECT conlang_word FROM dictionary WHERE english_word = ?");
-            $stmt->bind_param("s", $lookup_word);
+            $placeholders = implode(',', array_fill(0, count($potential_roots), '?'));
+            $types = str_repeat('s', count($potential_roots));
+            
+            $stmt = $conn->prepare("SELECT conlang_word, english_word FROM dictionary WHERE english_word IN ($placeholders) ORDER BY LENGTH(english_word) ASC LIMIT 1");
+            $stmt->bind_param($types, ...$potential_roots);
             $stmt->execute();
             $res = $stmt->get_result();
 
             if ($row = $res->fetch_assoc()) {
                 $root_word = $row['conlang_word'];
+                $lookup_word = $row['english_word']; 
             } else {
-                // Not in DB: Gather context for AI
+                // No match found? Use the most likely root for AI generation
+                // If it ends in 'ing', use the 'e' version as the primary guess
+                $lookup_word = (str_ends_with($raw_api_word, 'ing')) ? substr($raw_api_word, 0, -3) . "e" : $raw_api_word;
+                
                 $all_known = $conn->query("SELECT english_word, conlang_word FROM dictionary");
                 $compounds_found = [];
                 $all_words = [];
@@ -112,7 +133,6 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
                     $ins = $conn->prepare("INSERT INTO dictionary (english_word, conlang_word) VALUES (?, ?)");
                     $ins->bind_param("ss", $lookup_word, $root_word);
                     $ins->execute();
-                    $is_new = true;
                 }
             }
 
