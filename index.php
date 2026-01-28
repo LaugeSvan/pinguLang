@@ -113,7 +113,7 @@ function callAi($word, $context = "", $avoid = "") {
     $payload = [
         "model" => "llama-3.3-70b-versatile",
         "messages" => [
-            ["role" => "system", "content" => "You are the creator of the Pingulinian language. Phonology: m, r, p, k, s, l, f, n, t, a, e, i, o, u. Blend if context exists: [$context]. Avoid: [$avoid]. Output ONLY word."],
+            ["role" => "system", "content" => "You are the creator of the Pingulinian language. Phonology: m, r, p, k, s, l, f, n, t, a, e, i, o, u. Blend if context exists: [$context]. Avoid: [$avoid]. Output ONLY word. You are not allowed to translate any words that are not in the english dictionary, e.g. 'six seven', 'å' or 'vilhelm'. Only translate things that are words, nothing else."],
             ["role" => "user", "content" => "New word for '$word':"]
         ],
         "temperature" => 0.7
