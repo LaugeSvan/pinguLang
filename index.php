@@ -5,10 +5,10 @@ $output = "";
 $search = "";
 $is_new = false;
 $status_message = ""; 
+$lookup_word = "";
 
 // --- 1. HELPER: API LOOKUP ---
 function getWordData($word) {
-    // 1. Clean the input
     $clean_word = trim(str_ireplace('to ', '', $word));
     $url = "https://api.dictionaryapi.dev/api/v2/entries/en/" . urlencode($clean_word);
     
@@ -18,9 +18,6 @@ function getWordData($word) {
     curl_setopt($ch, CURLOPT_TIMEOUT, 5);
     curl_setopt($ch, CURLOPT_USERAGENT, 'PingulinianApp/1.0');
 
-    // --- SSL HANDLING ---
-    // On your local machine, keep these as FALSE. 
-    // When you upload to a real server, try changing them to TRUE.
     $is_local = ($_SERVER['REMOTE_ADDR'] === '127.0.0.1' || $_SERVER['REMOTE_ADDR'] === '::1');
     if ($is_local) {
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -73,11 +70,9 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
         if (!$api_data) {
             $status_message = "Sorry pal, we couldn't find definitions for '$search'.";
         } else {
-            // Use the root word from the API (e.g. "running" becomes "run")
             $lookup_word = strtolower($api_data['word']);
             $is_verb = false;
 
-            // Check if word can be a verb
             foreach ($api_data['meanings'] as $meaning) {
                 if ($meaning['partOfSpeech'] === 'verb') {
                     $is_verb = true;
@@ -85,10 +80,9 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
                 }
             }
 
-            // Plural check (Manual, as Dictionary API doesn't flag plurality simply)
             $is_plural = str_ends_with($search, 's') && !str_ends_with($search, 'ss');
 
-            // --- Database / AI Lookup ---
+            // --- Database Lookup ---
             $root_word = "";
             $stmt = $conn->prepare("SELECT conlang_word FROM dictionary WHERE english_word = ?");
             $stmt->bind_param("s", $lookup_word);
@@ -98,39 +92,27 @@ if (isset($_POST['search']) && !empty($_POST['search'])) {
             if ($row = $res->fetch_assoc()) {
                 $root_word = $row['conlang_word'];
             } else {
-                // Find compounds
+                // Not in DB: Gather context for AI
                 $all_known = $conn->query("SELECT english_word, conlang_word FROM dictionary");
                 $compounds_found = [];
+                $all_words = [];
                 while($rk = $all_known->fetch_assoc()) {
                     if (str_contains($lookup_word, $rk['english_word'])) {
                         $compounds_found[] = $rk['english_word'] . ":" . $rk['conlang_word'];
                     }
+                    $all_words[] = $rk['conlang_word'];
                 }
+                
                 $context = implode(", ", $compounds_found);
+                $avoid = implode(", ", array_slice($all_words, -10));
 
-                // Find typos
-                $all_known->data_seek(0); 
-                while ($row = $all_known->fetch_assoc()) {
-                    if (levenshtein($lookup_word, $row['english_word']) === 1) {
-                        $root_word = $row['conlang_word'];
-                        $status_message = "Typo detected: Using root for '" . $row['english_word'] . "'.";
-                        break;
-                    }
-                }
+                $root_word = callAi($lookup_word, $context, $avoid);
 
-                if (!$root_word) {
-                    $recent_avoid = $conn->query("SELECT conlang_word FROM dictionary ORDER BY id DESC LIMIT 10");
-                    $avoid_list = [];
-                    while($r = $recent_avoid->fetch_assoc()) { $avoid_list[] = $r['conlang_word']; }
-                    
-                    $root_word = callAi($lookup_word, $context, implode(", ", $avoid_list));
-
-                    if ($root_word && $root_word !== "error") {
-                        $ins = $conn->prepare("INSERT INTO dictionary (english_word, conlang_word) VALUES (?, ?)");
-                        $ins->bind_param("ss", $lookup_word, $root_word);
-                        $ins->execute();
-                        $is_new = true;
-                    }
+                if ($root_word && $root_word !== "error") {
+                    $ins = $conn->prepare("INSERT INTO dictionary (english_word, conlang_word) VALUES (?, ?)");
+                    $ins->bind_param("ss", $lookup_word, $root_word);
+                    $ins->execute();
+                    $is_new = true;
                 }
             }
 
