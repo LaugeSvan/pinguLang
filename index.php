@@ -209,6 +209,9 @@ if (!empty($dict_data)) {
         }
         engInput.addEventListener('input', filter);
         pinInput.addEventListener('input', filter);
+
+        //remove this if you make pinguLang work again
+        alert("pinguLang is shut down, and will not come up. To keep using it, go to https://github.com/LaugeSvan/pinguLang")
     </script>
 </body>
 </html>
